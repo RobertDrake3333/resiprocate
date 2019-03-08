@@ -47,6 +47,16 @@ class Uri : public ParserCategory
       const Data& opaque() const {checkParsed(); return mHost;}
       Data& path() {checkParsed(); return mPath;}
       const Data& path() const {checkParsed(); return mPath;}
+      Data& nid() {checkParsed(); return mNID;}
+      const Data& nid() const {checkParsed(); return mNID;}
+      Data& nss() {checkParsed(); return mNSS;}
+      const Data& nss() const {checkParsed(); return mNSS;}
+      Data& urnRComponent() {checkParsed(); return mUrnRComponent;}
+      const Data& urnRComponent() const {checkParsed(); return mUrnRComponent;}
+      Data& urnQComponent() {checkParsed(); return mUrnQComponent;}
+      const Data& urnQComponent() const {checkParsed(); return mUrnQComponent;}
+      Data& urnFComponent() {checkParsed(); return mUrnFComponent;}
+      const Data& urnFComponent() const {checkParsed(); return mUrnFComponent;}
 
       // Returns user@host[:port] (no scheme)
       Data getAor() const;
@@ -156,6 +166,10 @@ class Uri : public ParserCategory
           used as an enum lookup */
       bool isEnumSearchable() const;
 
+      /** If this is a properly formatted URN, mNID should be filled after parsing.
+       *  isURN() returns a boolean indicating if mNID contains data. */
+      bool isURN() const {checkParsed(); return !mNID.empty();}
+
       /** Return a vector of domains to do a NAPTR lookup for enum */
       std::vector<Data> getEnumLookups(const std::vector<Data>& suffixes) const;
 
@@ -206,6 +220,36 @@ class Uri : public ParserCategory
                               "0123456789"
                               "-_.!~*\\()&=+$").flip());
          return passwordEncodingTable;
+      }
+
+      static EncodingTable& getNIDAllowedChars()
+      {
+         static EncodingTable nidAllowedChars(
+               Data::toBitset("abcdefghijklmnopqrstuvwxyz"
+                              "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                              "0123456789"
+                              "-"));
+         return nidAllowedChars;
+      }
+
+      static EncodingTable& getNSSAllowedChars()
+      {
+         static EncodingTable nssAllowedChars(
+               Data::toBitset("abcdefghijklmnopqrstuvwxyz"
+                              "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                              "0123456789"
+                              "-._~%!$&'()*+,;=:@/"));
+         return nssAllowedChars;
+      }
+
+      static EncodingTable& getComponentChars()
+      {
+         static EncodingTable componentChars(
+               Data::toBitset("abcdefghijklmnopqrstuvwxyz"
+                              "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                              "0123456789"
+                              "-._~%!$&'()*+,;=:@/?"));
+         return componentChars;
       }
 
       static EncodingTable& getLocalNumberTable()
@@ -267,6 +311,13 @@ class Uri : public ParserCategory
       Data mPassword;
       Data mNetNs;  ///< Net namespace name scoping host and port
       Data mPath;
+
+      //URN specific data members
+      Data mNID;
+      Data mNSS;
+      Data mUrnRComponent;
+      Data mUrnQComponent;
+      Data mUrnFComponent;
 
       void getAorInternal(bool dropScheme, bool addPort, Data& aor) const;
       mutable bool mHostCanonicalized;

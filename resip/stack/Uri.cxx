@@ -28,6 +28,9 @@ static bool initAllTables()
    Uri::getPasswordEncodingTable();
    Uri::getLocalNumberTable();
    Uri::getGlobalNumberTable();
+   Uri::getNIDAllowedChars();
+   Uri::getNSSAllowedChars();
+   Uri::getComponentChars();
    return true;
 }
 
@@ -73,6 +76,11 @@ Uri::Uri(const Uri& rhs,
      mPassword(rhs.mPassword),
      mNetNs(rhs.mNetNs),
      mPath(rhs.mPath),
+     mNID(rhs.mNID),
+     mNSS(rhs.mNSS),
+     mUrnRComponent(rhs.mUrnRComponent),
+     mUrnQComponent(rhs.mUrnQComponent),
+     mUrnFComponent(rhs.mUrnFComponent),
      mHostCanonicalized(rhs.mHostCanonicalized),
      mCanonicalHost(rhs.mCanonicalHost),
      mEmbeddedHeadersText(rhs.mEmbeddedHeadersText.get() ? new Data(*rhs.mEmbeddedHeadersText) : 0),
@@ -352,6 +360,12 @@ Uri::operator=(const Uri& rhs)
       mPort = rhs.mPort;
       mPassword = rhs.mPassword;
       mNetNs = rhs.mNetNs;
+      mNID = rhs.mNID;
+      mNSS = rhs.mNSS;
+      mUrnRComponent = rhs.mUrnRComponent;
+      mUrnQComponent = rhs.mUrnQComponent;
+      mUrnFComponent = rhs.mUrnFComponent;
+
       if (rhs.mEmbeddedHeaders.get() != 0)
       {
          mEmbeddedHeaders.reset(new SipMessage(*rhs.mEmbeddedHeaders));
@@ -409,7 +423,11 @@ class OrderUnknownParameters
 bool 
 Uri::operator==(const Uri& other) const
 {
-   checkParsed();
+   if (isURN()) //isURN calls checkParsed on this
+   {
+       return aorEqual(other);
+   }
+
    other.checkParsed();
 
    // compare hosts
@@ -677,8 +695,23 @@ Uri::operator!=(const Uri& other) const
 bool
 Uri::operator<(const Uri& other) const
 {
+   if (isURN() && other.isURN())
+   {
+       if (mNID < other.mNID)
+       {
+           return true;
+       }
+
+       if (mNID > other.mNID)
+       {
+           return false;
+       }
+
+       return (mNSS < other.mNSS);
+   }
+
    other.checkParsed();
-   checkParsed();
+
    if (mUser < other.mUser)
    {
       return true;
@@ -741,10 +774,37 @@ Uri::operator<(const Uri& other) const
    return mPort < other.mPort;
 }
 
+void percentEncodedToUpper(std::string& percentString)
+{
+    size_t pos = 0;
+    while ((pos = percentString.find('%', pos)) != std::string::npos)
+    {
+        char currentChar = std::toupper(percentString[pos+1]);
+        std::string replaceString(&currentChar);
+        currentChar = std::toupper(percentString[pos+2]);
+        replaceString += currentChar;
+        percentString.replace(pos+1, 2, replaceString);
+    }
+}
+
 bool
 Uri::aorEqual(const resip::Uri& rhs) const
 {
-   checkParsed();
+   if (isURN())
+   {
+       if (!rhs.isURN())
+           return false;
+
+       //Percent encoded characters in the NSS are not to be decoded, but if they contain
+       //characters a-f, these are to be compared case insensitive.  All other
+       //characters of the NSS shall be compared as case sensitive.
+       std::string thisNSS(mNSS.c_str()); std::string otherNSS(rhs.mNSS.c_str());
+       percentEncodedToUpper(thisNSS); percentEncodedToUpper(otherNSS);
+
+       return isEqualNoCase(mScheme, rhs.mScheme) && isEqualNoCase(mNID, rhs.mNID) &&
+              (thisNSS.compare(otherNSS) == 0);
+   }
+
    rhs.checkParsed();
 
    if (!mHostCanonicalized)
@@ -782,8 +842,37 @@ Uri::aorEqual(const resip::Uri& rhs) const
 void 
 Uri::getAorInternal(bool dropScheme, bool addPort, Data& aor) const
 {
-   checkParsed();
-   // canonicalize host
+   // !bwc! Maybe reintroduce caching of aor. (Would use a bool instead of the
+   // mOldX cruft)
+   //                                                  @:10000
+   aor.clear();
+   if (isURN()) //checkParsed called by isURN
+   {
+       aor.reserve((dropScheme ? 0 : mScheme.size()+1)
+       + mNID.size() + mNSS.size() + 7);
+
+       if(!dropScheme)
+       {
+          aor += mScheme;
+          aor += ':';
+       }
+
+       aor += mNID;
+       aor += Symbols::COLON;
+       aor += mNSS;
+
+       return;
+   }
+
+
+   aor.reserve((dropScheme ? 0 : mScheme.size()+1)
+   + mUser.size() + mCanonicalHost.size() + 7);
+
+   if(!dropScheme)
+   {
+      aor += mScheme;
+      aor += ':';
+   }
 
    addPort = addPort && mPort!=0;
 
@@ -801,18 +890,6 @@ Uri::getAorInternal(bool dropScheme, bool addPort, Data& aor) const
          mCanonicalHost.lowercase();
       }
       mHostCanonicalized = true;
-   }
-
-   // !bwc! Maybe reintroduce caching of aor. (Would use a bool instead of the
-   // mOldX cruft)
-   //                                                  @:10000
-   aor.clear();
-   aor.reserve((dropScheme ? 0 : mScheme.size()+1)
-       + mUser.size() + mCanonicalHost.size() + 7);
-   if(!dropScheme)
-   {
-      aor += mScheme;
-      aor += ':';
    }
 
    if (!mUser.empty())
@@ -993,6 +1070,10 @@ Uri::parse(ParseBuffer& pb)
    pb.skipWhitespace();
    const char* start = pb.position();
 
+   pb.skipToEnd();
+   Data tempData = pb.data(start);
+   pb.reset(start);
+
    // Relative URLs (typically HTTP) start with a slash.  These
    // are seen when parsing the WebSocket handshake.
    if (*pb.position() == Symbols::SLASH[0])
@@ -1014,6 +1095,140 @@ Uri::parse(ParseBuffer& pb)
    pb.data(mScheme, start);
    pb.skipChar(Symbols::COLON[0]);
    mScheme.schemeLowercase();
+
+   if (mScheme==Symbols::Urn)
+   {
+       const char* anchor = pb.position();
+       pb.skipChars(getNIDAllowedChars());
+       if (!pb.eof())
+       {
+           pb.skipBackChar();
+           if ((*pb.position() != '-') && (*anchor != '-'))
+           {
+               pb.skipChar();
+               pb.data(mNID, anchor);
+               anchor = pb.skipChar(Symbols::COLON[0]);
+           }
+           else
+           {
+               throw ParseException("NID Contains non-standard characters","Uri",__FILE__,__LINE__);
+           }
+       }
+       else
+       {
+           throw ParseException("Unexpected end of URN after NID","Uri",__FILE__,__LINE__);
+       }
+
+       if (*pb.position() == '/')
+       {
+           throw ParseException("NSS cannot start with a /","Uri",__FILE__,__LINE__);
+       }
+       pb.skipChars(getNSSAllowedChars());
+       pb.data(mNSS, anchor);
+
+       if ((!pb.eof()) && (*pb.position() == '?'))
+       {
+           bool componentParsing = false;
+           bool parseQ = true;
+           pb.skipChar();
+           if (*pb.position() == '+')
+           {
+               componentParsing = true;
+               parseQ = false;
+               anchor = pb.skipChar();
+               if ((*pb.position() == '/') || (*pb.position() == '?'))
+               {
+                   throw ParseException("R-Component cannot start with a / or ?","Uri",__FILE__,__LINE__);
+               }
+               const char* correctFormatTo = pb.skipChars(getComponentChars());
+               bool correctFormatToEnd = pb.eof();
+               pb.reset(anchor);
+               pb.skipToChar('?');
+               while ((!pb.eof()) && (correctFormatTo > pb.position()))
+               {
+                   pb.skipChar();
+                   if (*pb.position() == '=')
+                   {
+                       parseQ = true;
+                       pb.skipBackChar();
+                       pb.data(mUrnRComponent, anchor);
+                       pb.skipChar();
+                       break;
+                   }
+                   pb.skipToChar('?');
+               }
+
+               if (!parseQ)
+               {
+                   if (!correctFormatToEnd)
+                   {
+                       pb.reset(correctFormatTo);
+                   }
+
+                   pb.data(mUrnRComponent, anchor);
+               }
+           }
+
+           if (parseQ && (*pb.position() == '='))
+           {
+               anchor = pb.skipChar();
+               if ((*pb.position() == '/') || (*pb.position() == '?'))
+               {
+                   throw ParseException("Q-Component cannot start with a / or ?","Uri",__FILE__,__LINE__);
+               }
+               pb.skipChars(getComponentChars());
+               pb.data(mUrnQComponent, anchor);
+           }
+           else if (!componentParsing)
+           {
+               throw ParseException("? without + or = to indicate component is malformed outside of components","Uri",__FILE__,__LINE__);
+           }
+       }
+
+       if ((!pb.eof()) && (*pb.position() == '#'))
+       {
+           anchor = pb.skipChar();
+           pb.skipChars(getComponentChars());
+           pb.data(mUrnFComponent, anchor);
+       }
+
+       bool resetToEndOfURI = false;
+       if (!pb.eof())
+       {
+           anchor = pb.position();
+           resetToEndOfURI = true;
+       }
+       else
+       {
+           anchor = pb.end();
+       }
+
+       //Guarantee % is followed by two hex values for NSS and optional components
+       pb.reset(start);
+       pb.skipToChar('%');
+       while ((!pb.eof()) && (pb.position() < anchor))
+       {
+           pb.skipChar();
+           if ((!pb.eof()) && (pb.position() < anchor) && ( DataHelper::isCharHex[*pb.position()]))
+           {
+               pb.skipChar();
+               if (pb.eof() || (pb.position() >= anchor) || !(DataHelper::isCharHex[*pb.position()]))
+               {
+                   throw ParseException("Improperly formatted percent encoding, URN is Malformed","Uri",__FILE__,__LINE__);
+               }
+           }
+           else
+           {
+               throw ParseException("Improperly formatted percent encoding, URN is Malformed","Uri",__FILE__,__LINE__);
+           }
+
+           pb.skipToChar('%');
+       }
+
+       if (resetToEndOfURI)
+           pb.reset(anchor);
+       return;
+   }
 
    if (mScheme==Symbols::Tel)
    {
@@ -1168,6 +1383,21 @@ Uri::encodeParsed(EncodeStream& str) const
    if (!mScheme.empty())
    {
       str << mScheme << Symbols::COLON;
+
+      if (isURN())
+      {
+          //parse function guarantees URN allowed characters are already correct
+          str << mNID << Symbols::COLON << mNSS;
+
+          if (!mUrnRComponent.empty())
+              str << "?+" << mUrnRComponent;
+
+          if (!mUrnQComponent.empty())
+              str << "?=" << mUrnQComponent;
+
+          if (!mUrnFComponent.empty())
+              str << "#" << mUrnFComponent;
+      }
    }
 
    if (!mUser.empty())
