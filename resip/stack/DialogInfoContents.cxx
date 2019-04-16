@@ -141,17 +141,17 @@ DialogInfoContents::directionStringToEnum(const Data& directionString)
 const DialogInfoContents DialogInfoContents::Empty;
 
 DialogInfoContents::DialogInfoContents()
-   : Contents(getStaticType()), mIndent(DefaultEncodeIndent), mVersion(0), mDialogInfoState(Partial)
+   : Contents(getStaticType()), mIndent(DefaultEncodeIndent), mVersion(0), mDialogInfoState(DialogInfoStateNotSet)
 {
 }
 
 DialogInfoContents::DialogInfoContents(const Mime& contentType)
-   : Contents(getStaticType()), mIndent(DefaultEncodeIndent), mVersion(0), mDialogInfoState(Partial)
+   : Contents(getStaticType()), mIndent(DefaultEncodeIndent), mVersion(0), mDialogInfoState(DialogInfoStateNotSet)
 {
 }
 
 DialogInfoContents::DialogInfoContents(const HeaderFieldValue& hfv, const Mime& contentsType)
-   : Contents(hfv, contentsType), mIndent(DefaultEncodeIndent), mVersion(0), mDialogInfoState(Partial)
+   : Contents(hfv, contentsType), mIndent(DefaultEncodeIndent), mVersion(0), mDialogInfoState(DialogInfoStateNotSet)
 {
 }
 
@@ -438,6 +438,8 @@ DialogInfoContents::parse(ParseBuffer& pb)
    const XMLCursor::AttributeMap& attr = xml.getAttributes();
    XMLCursor::AttributeMap::const_iterator itAttr = attr.begin();
    bool baseDialogInfoNamespaceUriFound = false;
+   bool versionFound = false;
+   bool entityFound = false;
    for (; itAttr != attr.end(); itAttr++)
    {
       if (itAttr->first.prefix("xmlns"))
@@ -461,6 +463,7 @@ DialogInfoContents::parse(ParseBuffer& pb)
       else if (itAttr->first == "version")
       {
          mVersion = itAttr->second.convertUnsignedLong();
+         versionFound = true;
       }
       else if (itAttr->first == "state")
       {
@@ -469,6 +472,7 @@ DialogInfoContents::parse(ParseBuffer& pb)
       else if (itAttr->first == "entity")
       {
          mEntity = Uri(itAttr->second.xmlCharDataDecode());  // can throw!
+         entityFound = true;
       }
       else
       {
@@ -479,7 +483,19 @@ DialogInfoContents::parse(ParseBuffer& pb)
    if (!baseDialogInfoNamespaceUriFound)
    {
       WarningLog(<< "Base xmlns from RFC4235 was not found, expected: " << BaseDialogInfoNamespaceUri);
-      // ?slg? - throw or be tolerant?
+      throw ParseException("Base xmlns from RFC4235 was not found","DialogInfoContents",__FILE__,__LINE__);
+   }
+   if (!versionFound)
+   {
+       throw ParseException("Required field 'version' was not found, dialog contents are malformed","DialogInfoContents",__FILE__,__LINE__);
+   }
+   if (mDialogInfoState == DialogInfoStateNotSet)
+   {
+       throw ParseException("Required field 'state' was not found, dialog contents are malformed","DialogInfoContents",__FILE__,__LINE__);
+   }
+   if (!entityFound)
+   {
+       throw ParseException("Required field 'entity' was not found, dialog contents are malformed","DialogInfoContents",__FILE__,__LINE__);
    }
 
    if (xml.firstChild())
@@ -497,6 +513,12 @@ DialogInfoContents::parse(ParseBuffer& pb)
       } while (xml.nextSibling());
       xml.parent();
    }
+
+   if (mDialogs.empty())
+   {
+       throw ParseException("Required field 'dialog' was not found, or contains malformed entries.  Dialog contents are malformed","DialogInfoContents",__FILE__,__LINE__);
+   }
+
 }
 
 void 
@@ -536,7 +558,7 @@ DialogInfoContents::parseDialog(XMLCursor& xml)
    if (dialog.mId.empty())
    {
       WarningLog(<< "Dialog Id was not found for dialog element");
-      // ?slg? - throw or be tolerant?
+      return; //Do not push back Malformed dialogs
    }
 
    // Clear out any remnent parsed dialog child elements
@@ -652,6 +674,12 @@ DialogInfoContents::parseDialog(XMLCursor& xml)
          }
       } while (xml.nextSibling());
       xml.parent();
+   }
+
+   if (dialog.mState == DialogStateNotSet)
+   {
+      WarningLog(<< "Dialog State was not found for dialog element");
+      return; //Do not push back Malformed dialogs
    }
 
    //DebugLog(<< "Pushing " << mDialogs.size() << "'th dialog " << dialog.mId << " parsed into DialogInfoCOntents::mDialogs");

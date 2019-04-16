@@ -26,7 +26,8 @@ public:
    {
       Full,
       Partial,
-      MaxDialogInfoState
+      MaxDialogInfoState,
+      DialogInfoStateNotSet
    };
    // Warning if you modify the above list, make sure you modify DialogInfoStateStrings in the .cxx file to match
 
@@ -37,7 +38,8 @@ public:
       Early,
       Confirmed,
       Terminated,
-      MaxDialogState
+      MaxDialogState,
+      DialogStateNotSet
    };
    // Warning if you modify the above list, make sure you modify DialogStateStrings in the .cxx file to match
 
@@ -95,7 +97,7 @@ public:
    class Dialog
    {
    public:
-      Dialog() : mDirection(MaxOrUnsetDirection), mState(Trying), mStateEvent(MaxOrUnsetDialogStateEvent), mStateCode(0), mDuration(0),
+      Dialog() : mDirection(MaxOrUnsetDirection), mState(DialogStateNotSet), mStateEvent(MaxOrUnsetDialogStateEvent), mStateCode(0), mDuration(0),
          mHasDuration(false) {}
 
       // Accesors for data
