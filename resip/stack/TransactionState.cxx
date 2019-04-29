@@ -2794,9 +2794,16 @@ TransactionState::sendToTU(TransactionMessage* msg)
 
 void
 TransactionState::sendToTU(TransactionUser* tu, TransactionController& controller, TransactionMessage* msg) 
-{   
-   msg->setTransactionUser(tu);
-   controller.mTuSelector.add(msg, TimeLimitFifo<Message>::InternalElement);
+{
+    if (tu)
+    {
+        msg->setTransactionUser(tu);
+        controller.mTuSelector.add(msg, TimeLimitFifo<Message>::InternalElement);
+    }
+    else
+    {
+        delete msg;
+    }
 }
 
 SipMessage*
